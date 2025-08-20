@@ -35,7 +35,7 @@ const mainWallet = new ethers.Wallet(process.env.MAIN_WALLET_PRIVATE_KEY, provid
 
 
 
-async function getBaseEthAmount(usdAmount = 0.5) {
+async function getBaseEthAmount(usdAmount = 0.4) {
   try {
     const response = await axios.get("https://api.coinbase.com/v2/prices/ETH-USD/spot");
     const ethPrice = parseFloat(response.data.data.amount);
@@ -43,7 +43,7 @@ async function getBaseEthAmount(usdAmount = 0.5) {
     return Number(amount.toFixed(6));
   } catch (error) {
     console.error("Error fetching ETH price from Coinbase:", error);
-    return 0.00010;
+    return 0.00011;
   }
 }
 // Create user wallet
@@ -144,7 +144,7 @@ bot.start(async (ctx) => {
   }
 
   // Get current $0.5 BaseETH amount
-  const baseEthAmount = await getBaseEthAmount(0.5);
+  const baseEthAmount = await getBaseEthAmount(0.4);
 
   // Save the expected amount for this session
   await db.collection("payments").doc(userId).update({
