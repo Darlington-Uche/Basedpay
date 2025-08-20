@@ -3,6 +3,8 @@ const { Telegraf, Markup } = require("telegraf");
 const { ethers } = require("ethers");
 const admin = require("firebase-admin");
 const axios = require("axios");
+const express = require("express");
+const app = express();
 
 // Firebase setup
 admin.initializeApp({
@@ -18,6 +20,14 @@ const db = admin.firestore();
 // Telegram bot setup
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const MAIN_BOT_URL = process.env.MAIN_BOT_URL;
+const PORT = process.env.PORT || 3000;
+const URL = process.env.WEBHOOK_URL; // e.g. "https://your-domain.com"
+
+// Set webhook
+bot.telegram.setWebhook(`${URL}/bot${process.env.BOT_TOKEN}`);
+
+// Mount webhook
+app.use(bot.webhookCallback(`/bot${process.env.BOT_TOKEN}`));
 
 // Blockchain provider & main wallet
 const provider = new ethers.providers.JsonRpcProvider(process.env.PROVIDER_URL);
@@ -165,5 +175,13 @@ bot.action("cancel_payment", async (ctx) => {
 });
 
 // Launch
-bot.launch({ polling: true });
+// Root endpoint
+app.get("/", (req, res) => {
+  res.send("Bot is running with webhook 🚀");
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`Server is listening on port ${PORT}`);
+});
 console.log("💙 Payment Bot running...");
