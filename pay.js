@@ -60,7 +60,7 @@ async function createUserWallet(userId) {
 
 // Sweep user wallet to main wallet
 // Get ETH amount equivalent to USD
-async function getBaseEtAmount(usdAmount = 0.5) {
+async function getBaseEtAmount(usdAmount = 0.4) {
   try {
     // Coinbase first
     const response = await axios.get("https://api.coinbase.com/v2/prices/ETH-USD/spot");
