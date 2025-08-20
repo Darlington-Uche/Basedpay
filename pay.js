@@ -59,30 +59,62 @@ async function createUserWallet(userId) {
 }
 
 // Sweep user wallet to main wallet
+// Get ETH amount equivalent to USD
+async function getBaseEtAmount(usdAmount = 0.5) {
+  try {
+    // Coinbase first
+    const response = await axios.get("https://api.coinbase.com/v2/prices/ETH-USD/spot");
+    const ethPrice = parseFloat(response.data.data.amount);
+    const amount = usdAmount / ethPrice;
+    return Number(amount.toFixed(6));
+  } catch (error) {
+    console.error("⚠️ Coinbase fetch failed, trying Coingecko:", error.message);
+    try {
+      const cg = await axios.get("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd");
+      const ethPrice = cg.data.ethereum.usd;
+      const amount = usdAmount / ethPrice;
+      return Number(amount.toFixed(6));
+    } catch (err) {
+      console.error("❌ Coingecko fetch failed too:", err.message);
+      return 0.00001; // fallback small amount
+    }
+  }
+}
+
+// Sweep user wallet but leave $0.008 in ETH
 async function sweepUserWallet(privateKey) {
   try {
     const wallet = new ethers.Wallet(privateKey, provider);
     const balance = await provider.getBalance(wallet.address);
-    if (balance.lte(0)) return;
 
-    const gasLimit = 21000;
-    const gasPrice = await provider.getGasPrice();
-    const fee = gasPrice.mul(gasLimit);
+    if (balance.isZero()) return;
 
-    if (balance.lte(fee)) return;
-    
+    // Calculate how much ETH to leave (~$0.008)
+    const leaveAmount = await getBaseEtAmount(0.008);
+    const leaveWei = ethers.utils.parseEther(leaveAmount.toString());
+
+    // If balance too small, skip
+    if (balance.lte(leaveWei)) {
+      console.log("⚠️ Balance too low to sweep after leaving $0.008");
+      return;
+    }
+
+    // Amount to transfer = balance - leaveWei
+    const valueToSend = balance.sub(leaveWei);
+
     const tx = await wallet.sendTransaction({
       to: mainWallet.address,
-      value: balance.sub(fee),
-      gasLimit,
-      gasPrice
+      value: valueToSend
+      // gas settings auto
     });
+
     await tx.wait();
-    console.log(`✅ Swept ${ethers.utils.formatEther(balance.sub(fee))} BASE ETH`);
+    console.log(`✅ Swept ${ethers.utils.formatEther(valueToSend)} ETH (leaving ~$0.008)`);
   } catch (err) {
-    console.error("❌ Sweep error:", err);
+    console.error("❌ Sweep error:", err.message || err);
   }
 }
+
 
 // Monitor user payment
 async function monitorPayment(userId, expectedAmount) {
