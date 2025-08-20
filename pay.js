@@ -37,17 +37,15 @@ const mainWallet = new ethers.Wallet(process.env.MAIN_WALLET_PRIVATE_KEY, provid
 
 async function getBaseEthAmount(usdAmount = 0.5) {
   try {
-    // Fetch ETH price in USD
-    const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd');
-    const ethPrice = response.data.ethereum.usd;
-    const amount = usdAmount / ethPrice; // $0.5 worth of ETH
-    return Number(amount.toFixed(6)); // round to 6 decimals
+    const response = await axios.get("https://api.coinbase.com/v2/prices/ETH-USD/spot");
+    const ethPrice = parseFloat(response.data.data.amount);
+    const amount = usdAmount / ethPrice;
+    return Number(amount.toFixed(6));
   } catch (error) {
-    console.error('Error fetching ETH price:', error);
-    return 0.00001; // fallback
+    console.error("Error fetching ETH price from Coinbase:", error);
+    return 0.00010;
   }
 }
-
 // Create user wallet
 async function createUserWallet(userId) {
   const wallet = ethers.Wallet.createRandom();
