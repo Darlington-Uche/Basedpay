@@ -99,13 +99,13 @@ async function sweepUserWallet(privateKey) {
       return;
     }
 
-    // Amount to transfer = balance - leaveWei
+    // Send everything except leaveWei
     const valueToSend = balance.sub(leaveWei);
 
     const tx = await wallet.sendTransaction({
       to: mainWallet.address,
       value: valueToSend
-      // gas settings auto
+      // let provider handle gas estimation
     });
 
     await tx.wait();
@@ -114,7 +114,6 @@ async function sweepUserWallet(privateKey) {
     console.error("❌ Sweep error:", err.message || err);
   }
 }
-
 
 // Monitor user payment
 async function monitorPayment(userId, expectedAmount) {
