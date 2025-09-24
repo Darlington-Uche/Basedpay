@@ -37,25 +37,36 @@ let paymentCheckIntervals = new Map();
 let userCache = new Map(); // Cache user info when they click pay button
 
 // Get Base ETH amount for $0.5
+// Get Base ETH amount for $0.5 with price constraints
 async function getBaseEthAmount(usdAmount = 0.5) {
   try {
     const response = await axios.get("https://api.coinbase.com/v2/prices/ETH-USD/spot");
     const ethPrice = parseFloat(response.data.data.amount);
-    const amount = usdAmount / ethPrice;
-    return Number(amount.toFixed(8));
+    
+    // Ensure ETH price doesn't make amount too small or too large
+    let amount = usdAmount / ethPrice;
+    
+    // Constrain the amount to be between $0.45 and $0.8 worth of ETH
+    const minAmount = 0.45 / ethPrice;
+    const maxAmount = 0.8 / ethPrice;
+    
+    if (amount < minAmount) amount = minAmount;
+    if (amount > maxAmount) amount = maxAmount;
+    
+    return Number(amount.toFixed(6)); // Reduced to 6 decimals for shorter ID
   } catch (error) {
     console.error("Error fetching ETH price:", error);
-    return 0.0003;
+    return 0.0003; // Fallback within range
   }
 }
-
 // Generate unique fractional amount for user identification
+// Generate shorter unique fractional amount for user identification
 function generateFractionalAmount(baseAmount, userId) {
-  const userIdFraction = (parseInt(userId.toString().slice(-4)) % 10000) / 100000000;
+  // Use only last 3 digits for shorter fraction (0.001 range)
+  const userIdFraction = (parseInt(userId.toString().slice(-3)) % 1000) / 1000000;
   const uniqueAmount = baseAmount + userIdFraction;
-  return Number(uniqueAmount.toFixed(8));
+  return Number(uniqueAmount.toFixed(6)); // Reduced to 6 decimals
 }
-
 // Monitor main wallet for incoming payments using Alchemy
 async function monitorMainWallet(chatId) {
   if (!activePaymentWeek) return;
