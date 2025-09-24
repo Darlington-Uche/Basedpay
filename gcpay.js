@@ -255,6 +255,7 @@ bot.action("show_payment_info", async (ctx) => {
 
   await ctx.reply(
     `💰 YOUR PAYMENT DETAILS\n\n` +
+    `for ..@${username}\n\n` +
     `Amount: ${userData.amount} BASE ETH\n` +
     `Address: ${MAIN_WALLET_ADDRESS}\n\n` +
     `⚠️ IMPORTANT: Send EXACTLY ${userData.amount} BASE ETH\n` +
