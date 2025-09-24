@@ -38,34 +38,46 @@ let userCache = new Map(); // Cache user info when they click pay button
 
 // Get Base ETH amount for $0.5
 // Get Base ETH amount for $0.5 with price constraints
-async function getBaseEthAmount(usdAmount = 0.5) {
+// Get Base ETH amount for $0.5 with strict price constraints
+async function getBaseEthAmount() {
   try {
     const response = await axios.get("https://api.coinbase.com/v2/prices/ETH-USD/spot");
     const ethPrice = parseFloat(response.data.data.amount);
     
-    // Ensure ETH price doesn't make amount too small or too large
-    let amount = usdAmount / ethPrice;
+    // Calculate base amount for $0.5
+    let baseAmount = 0.6 / ethPrice;
     
-    // Constrain the amount to be between $0.45 and $0.8 worth of ETH
-    const minAmount = 0.45 / ethPrice;
-    const maxAmount = 0.8 / ethPrice;
+    // HARD CONSTRAINTS: Ensure base amount is within $0.4-$0.9 range
+    const minDollar = 0.5;
+    const maxDollar = 0.9;
+    const minAmount = minDollar / ethPrice;
+    const maxAmount = maxDollar / ethPrice;
     
-    if (amount < minAmount) amount = minAmount;
-    if (amount > maxAmount) amount = maxAmount;
+    // Force the amount to stay within range
+    if (baseAmount < minAmount) baseAmount = minAmount;
+    if (baseAmount > maxAmount) baseAmount = maxAmount;
     
-    return Number(amount.toFixed(6)); // Reduced to 6 decimals for shorter ID
+    console.log(`ETH Price: $${ethPrice}, Base Amount: ${baseAmount} ETH ($${baseAmount * ethPrice})`);
+    return Number(baseAmount.toFixed(6));
   } catch (error) {
     console.error("Error fetching ETH price:", error);
-    return 0.0003; // Fallback within range
+    // Safe fallback that's definitely in range
+    return 0.000177; // ~$0.5 at $3000 ETH price
   }
 }
 // Generate unique fractional amount for user identification
 // Generate shorter unique fractional amount for user identification
+// Generate unique fractional amount for user identification
 function generateFractionalAmount(baseAmount, userId) {
-  // Use only last 3 digits for shorter fraction (0.001 range)
-  const userIdFraction = (parseInt(userId.toString().slice(-3)) % 1000) / 1000000;
+  // Use only the last 2 digits for very small variation
+  const userIdFraction = (parseInt(userId.toString().slice(-2)) % 100) / 10000000; // Very small fraction
   const uniqueAmount = baseAmount + userIdFraction;
-  return Number(uniqueAmount.toFixed(6)); // Reduced to 6 decimals
+  
+  // Ensure we don't exceed 6 digits after decimal
+  const fixedAmount = Number(uniqueAmount.toFixed(6));
+  
+  console.log(`Base: ${baseAmount}, User ID: ${userId}, Fraction: ${userIdFraction}, Final: ${fixedAmount}`);
+  return fixedAmount;
 }
 // Monitor main wallet for incoming payments using Alchemy
 async function monitorMainWallet(chatId) {
