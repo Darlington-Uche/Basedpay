@@ -29,8 +29,7 @@ app.use(bot.webhookCallback(`/bot${process.env.BOT_TOKEN}`));
 
 // Alchemy provider setup
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY;
-const provider = new ethers.providers.AlchemyProvider("base-mainnet", ALCHEMY_API_KEY);
-
+const provider = new ethers.providers.JsonRpcProvider(`https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`);
 // Global variables for payment week
 let activePaymentWeek = null;
 let reminderIntervals = new Map();
