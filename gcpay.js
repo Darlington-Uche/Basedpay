@@ -29,7 +29,7 @@ app.use(bot.webhookCallback(`/bot${process.env.BOT_TOKEN}`));
 
 // Alchemy provider setup
 const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY;
-const provider = new ethers.providers.AlchemyProvider("base", ALCHEMY_API_KEY);
+const provider = new ethers.providers.AlchemyProvider("base-mainnet", ALCHEMY_API_KEY);
 
 // Global variables for payment week
 let activePaymentWeek = null;
