@@ -81,7 +81,7 @@ async function removeUnpaidUsers(chatId) {
         await new Promise(resolve => setTimeout(resolve, 1500));
         
       } catch (error) {
-        console.error(`❌ Error removing user ${memberUserId}:`, error.message);
+        console.error(`❌l Error removing user ${memberUserId}:`, error.message);
         errorCount++;
         
         // Continue with next user even if one fails
