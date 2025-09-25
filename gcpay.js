@@ -536,33 +536,191 @@ function getTimeRemaining(endTime) {
   return `${hours}h ${minutes}m`;
 }
 
+
+// Remove unpaid users using the provided username list
+async function removeUnpaidUsers(chatId) {
+  if (!activePaymentWeek) return 0;
+
+  // Create a map of paid user IDs
+  const paidUserIds = new Set();
+  for (const [userId, userData] of activePaymentWeek.users.entries()) {
+    if (userData.paid) {
+      paidUserIds.add(userId.toString());
+    }
+  }
+
+  // List of all group members (from your provided list)
+  const allGroupMembers = [
+    'Unknown_WebD', 'Chibykezueme', 'FMUSKD', 'Zabbuzza', 'wvlfy', 'Smallz_paid_dev', 
+    'Shae', 'Darling_W6', 'SketchA1dguy', 'olusolaakindele', 'Glone', 'Darlington_W3', 
+    'micavicCFI', 'Jvinxugbede', 'Codedcrazy1', 'Ady2304', 'charlex369', 'PROWLER13', 
+    'Olapuff00', 'damzzy08', 'Mayordapscats', 'GloriousPeculiar', 'royal631', 'Omos', 
+    'Blessing', 'Lil_senami', 'Sky_012345678900000', 'Hafiz', 'KvngIcey', 
+    'Dannykokercountcustom', 'A1_dguy', 'skay_Inds', 'Ucheligton_w3', 'CeceDbabie', 
+    'Justt_cece_lia', 'Darlington_W7', 'Olakunle', 'Uche2028', 'Yehuda08', 'Corneliauche', 
+    'Dawnmaki', 'Raider_ccc', 'Kolly', 'Ohbeejay1', 'Dannieumeh', 'Mide_2506'
+  ];
+
+  let removalCount = 0;
+  let errorCount = 0;
+
+  // Send warning message first
+  await bot.telegram.sendMessage(
+    chatId,
+    `🚨 REMOVING UNPAID USERS...\n\n` +
+    `All unpaid members will be removed from the group shortly.`
+  );
+
+  // Remove users one by one (except paid ones)
+  for (const username of allGroupMembers) {
+    try {
+      // Skip if this is a paid user (check by username matching)
+      let isPaidUser = false;
+      for (const [userId, userData] of activePaymentWeek.users.entries()) {
+        if (userData.username === username.replace('@', '') && userData.paid) {
+          isPaidUser = true;
+          break;
+        }
+      }
+
+      if (isPaidUser) {
+        console.log(`✅ Skipping paid user: ${username}`);
+        continue;
+      }
+
+      // Try to remove the user by username
+      console.log(`🚨 Attempting to remove: ${username}`);
+      
+      // First, unban to ensure they can be removed (if previously banned)
+      try {
+        await bot.telegram.unbanChatMember(chatId, username);
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } catch (unbanError) {
+        // Ignore unban errors - user might not be banned yet
+      }
+
+      // Ban the user (removes them from group)
+      await bot.telegram.banChatMember(chatId, username);
+      console.log(`✅ Successfully removed: ${username}`);
+      removalCount++;
+
+      // Wait 2 seconds between removals to avoid rate limits
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+    } catch (error) {
+      console.error(`❌ Failed to remove ${username}:`, error.message);
+      errorCount++;
+      
+      // Continue with next user even if one fails
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+  }
+
+  console.log(`Removal completed: ${removalCount} users removed, ${errorCount} errors`);
+  return removalCount;
+}
+
+// Alternative approach: Tag all unpaid users and remove them
+async function tagAndRemoveUnpaidUsers(chatId) {
+  if (!activePaymentWeek) return 0;
+
+  const unpaidUsers = [];
+  const paidUsers = [];
+
+  // Categorize users
+  for (const [userId, userData] of activePaymentWeek.users.entries()) {
+    if (userData.paid) {
+      paidUsers.push(userData.username || `User ${userId}`);
+    } else {
+      unpaidUsers.push({
+        userId,
+        username: userData.username,
+        userData
+      });
+    }
+  }
+
+  let removalCount = 0;
+
+  if (unpaidUsers.length > 0) {
+    // Tag all unpaid users first
+    let tagMessage = `🚨 UNPAID USERS BEING REMOVED:\n\n`;
+    unpaidUsers.forEach((user, index) => {
+      if (user.username) {
+        tagMessage += `@${user.username} `;
+      }
+    });
+
+    await bot.telegram.sendMessage(chatId, tagMessage);
+
+    // Remove each unpaid user
+    for (const user of unpaidUsers) {
+      try {
+        if (user.username) {
+          // Remove by username
+          await bot.telegram.banChatMember(chatId, user.username);
+          console.log(`✅ Removed @${user.username}`);
+        } else {
+          // Remove by user ID
+          await bot.telegram.banChatMember(chatId, parseInt(user.userId));
+          console.log(`✅ Removed user ID: ${user.userId}`);
+        }
+        removalCount++;
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      } catch (error) {
+        console.error(`❌ Error removing ${user.username || user.userId}:`, error.message);
+      }
+    }
+  }
+
+  return removalCount;
+}
+
+
+
+  // Send pre-removal notification
+  
+
+  // CHOOSE ONE METHOD:
+
+  // Method 1: Remove using the provided username list
+  
+
 // End payment week and remove unpaid users
+// Enhanced endPaymentWeek function
 async function endPaymentWeek(chatId) {
   if (!activePaymentWeek || activePaymentWeek.chatId !== chatId) return;
 
   console.log(`Ending payment week for chat ${chatId}`);
 
   // Clear intervals
-  if (reminderIntervals.has(chatId)) {
-    clearInterval(reminderIntervals.get(chatId));
-    reminderIntervals.delete(chatId);
-  }
+  cleanupIntervals(chatId);
 
-  if (paymentCheckIntervals.has(chatId)) {
-    clearInterval(paymentCheckIntervals.get(chatId));
-    paymentCheckIntervals.delete(chatId);
-  }
-
-  const unpaidUsers = [];
   const paidUsers = [];
+  const unpaidUsers = [];
 
+  // Categorize users
   for (const [userId, userData] of activePaymentWeek.users.entries()) {
     if (userData.paid) {
-      paidUsers.push(userData.username || `User ${userId}`);
+      paidUsers.push({
+        userId,
+        username: userData.username || `User ${userId}`,
+        amount: userData.amount
+      });
     } else {
-      unpaidUsers.push({ userId, userData });
+      unpaidUsers.push({
+        userId,
+        username: userData.username || `User ${userId}`,
+        amount: userData.amount
+      });
     }
   }
+await bot.telegram.sendMessage(
+    chatId,
+    `🔄 PAYMENT CYCLE ENDING...\n\n` +
+    `Removing ${unpaidUsers.length} unpaid users...\n` +
+    `${paidUsers.length} paid users will remain.`
+  );
 
   // Remove unpaid users
   // Remove ALL users except paid members
