@@ -600,6 +600,7 @@ for (const userId of allGroupMemberIds) {
 
 console.log(`Removal completed: ${removalCount} users removed, ${errorCount} errors`);
 return removalCount;
+}
 
   // Send pre-removal notification
   
