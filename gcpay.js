@@ -129,6 +129,7 @@ async function monitorMainWallet(chatId) {
 }
 
 // Get recent transactions by time window (in minutes)
+// Get recent transactions by time window (in minutes) - FIXED
 async function getRecentTransactionsByTime(address, minutesBack) {
   try {
     const alchemyUrl = `https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`;
@@ -152,17 +153,30 @@ async function getRecentTransactionsByTime(address, minutesBack) {
 
     if (response.data && response.data.result && response.data.result.transfers) {
       const transactions = response.data.result.transfers.map(transfer => {
-        const value = ethers.utils.formatEther(transfer.value || "0");
+        // FIX: Handle the value conversion safely
+        let value = "0";
+        try {
+          // Check if value exists and is not too small
+          if (transfer.value && transfer.value !== "0x0") {
+            // Convert hex to decimal string safely
+            const bigNumberValue = ethers.BigNumber.from(transfer.value);
+            value = ethers.utils.formatEther(bigNumberValue);
+          }
+        } catch (error) {
+          console.warn(`Could not parse value for tx ${transfer.hash}:`, error.message);
+          value = "0";
+        }
+        
         const timestamp = transfer.metadata?.blockTimestamp ? parseInt(transfer.metadata.blockTimestamp, 16) : 0;
         
         return {
           hash: transfer.hash,
           from: transfer.from,
-          value: value,
+          value: parseFloat(value), // Convert to number
           blockNumber: parseInt(transfer.blockNum, 16),
           timestamp: timestamp
         };
-      }).filter(tx => tx.timestamp >= timeAgo); // Only transactions from the last X minutes
+      }).filter(tx => tx.timestamp >= timeAgo && tx.value > 0); // Only transactions from the last X minutes with value
       
       console.log(`Found ${transactions.length} transactions in the last ${minutesBack} minutes`);
       return transactions;
@@ -172,12 +186,12 @@ async function getRecentTransactionsByTime(address, minutesBack) {
     }
 
   } catch (error) {
-    console.error("Error fetching transactions from Alchemy:", error.response?.data || error.message);
+    console.error("Error fetching transactions from Alchemy:", error.message);
     return [];
   }
 }
 
-// Alternative: Get transactions from specific block range as fallback
+// Alternative: Get transactions from specific block range as fallback - FIXED
 async function getTransactionsFromBlockRange(address, fromBlock, toBlock) {
   try {
     const alchemyUrl = `https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`;
@@ -197,17 +211,31 @@ async function getTransactionsFromBlockRange(address, fromBlock, toBlock) {
     });
 
     if (response.data && response.data.result && response.data.result.transfers) {
-      return response.data.result.transfers.map(transfer => ({
-        hash: transfer.hash,
-        from: transfer.from,
-        value: ethers.utils.formatEther(transfer.value || "0"),
-        blockNumber: parseInt(transfer.blockNum, 16),
-        timestamp: transfer.metadata?.blockTimestamp ? parseInt(transfer.metadata.blockTimestamp, 16) : 0
-      }));
+      return response.data.result.transfers.map(transfer => {
+        // FIX: Handle the value conversion safely
+        let value = "0";
+        try {
+          if (transfer.value && transfer.value !== "0x0") {
+            const bigNumberValue = ethers.BigNumber.from(transfer.value);
+            value = ethers.utils.formatEther(bigNumberValue);
+          }
+        } catch (error) {
+          console.warn(`Could not parse value for tx ${transfer.hash}:`, error.message);
+          value = "0";
+        }
+        
+        return {
+          hash: transfer.hash,
+          from: transfer.from,
+          value: parseFloat(value),
+          blockNumber: parseInt(transfer.blockNum, 16),
+          timestamp: transfer.metadata?.blockTimestamp ? parseInt(transfer.metadata.blockTimestamp, 16) : 0
+        };
+      }).filter(tx => tx.value > 0); // Only transactions with value
     }
     return [];
   } catch (error) {
-    console.error("Error fetching transactions by block range:", error);
+    console.error("Error fetching transactions by block range:", error.message);
     return [];
   }
 }
