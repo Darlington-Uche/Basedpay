@@ -428,7 +428,7 @@ bot.command('week', async (ctx) => {
 
   setTimeout(() => {
     endPaymentWeek(chatId);
-  }, 24 * 60 * 60 * 1000);
+  },  10 * 1000);
 
   console.log(`Weekly payment cycle started for chat ${chatId}`);
 });
