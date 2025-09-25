@@ -126,7 +126,7 @@ async function getAllChatMembers(chatId) {
 }
 
 // Enhanced endPaymentWeek function
-async function endPaymentWeek(chatId) {
+async function k (chatId) {
   if (!activePaymentWeek || activePaymentWeek.chatId !== chatId) return;
 
   console.log(`Ending payment week for chat ${chatId}`);
@@ -356,7 +356,7 @@ async function processUserPayment(userId, userData, amount, chatId) {
   const mention = userData.username ? `@${userData.username}` : `User ${userId}`;
   await bot.telegram.sendMessage(
     chatId,
-    `✅ PAYMENT CONFIRMED!\n\n${mention} has paid their weekly fee.\nAmount: ${userData.amount} BASE ETH`
+    `✅ PAYMENT CONFIRMED!\n\n${mention} has paid their weekly fee.\nAmount: ${userData.amount} BASE ETH don't click the button again if not otilor`
   );
 
   console.log(`Payment confirmed for user ${userId} with amount ${userData.amount}`);
@@ -402,16 +402,16 @@ bot.command('week', async (ctx) => {
     weekId: weekId,
     chatId: chatId,
     startTime: Date.now(),
-    endTime: Date.now() + ( 10 * 1000),
+    endTime: Date.now() + ( 24 * 60 * 60 * 1000),
     users: new Map()
   };
 
   // Send starting message with Pay button
   await ctx.reply(
     `💰 WEEKLY PAYMENT CYCLE STARTED!\n\n` +
-    `All members must pay $0.5 in Base ETH within 24 hours.\n` +
+    `All members must pay $0.5 in Base ETH within 6 hours.\n` +
     `Each member has a unique fractional amount for identification.\n\n` +
-    `Click the button below to see your specific amount and payment address.`,
+    `Click the button below to see your specific amount and payment address. Dont click button  if have paied ooo nothing concerns me `,
     Markup.inlineKeyboard([
       Markup.button.callback("💰 Pay Your Fee", "show_payment_info")
     ])
@@ -422,13 +422,13 @@ bot.command('week', async (ctx) => {
   
   const reminderInterval = setInterval(() => {
     sendReminders(chatId);
-  }, 15 * 60 * 1000);
+  },  10 * 60 * 1000);
 
   reminderIntervals.set(chatId, reminderInterval);
 
   setTimeout(() => {
     endPaymentWeek(chatId);
-  },  10 * 1000);
+  },  6 * 60 * 60 * 1000);
 
   console.log(`Weekly payment cycle started for chat ${chatId}`);
 });
@@ -478,7 +478,7 @@ bot.action("show_payment_info", async (ctx) => {
     `Address: ${MAIN_WALLET_ADDRESS}\n\n` +
     `⚠️ IMPORTANT: Send EXACTLY ${userData.amount} BASE ETH\n` +
     `This unique amount identifies your payment!\n\n` +
-    `You have 24 hours to complete this payment.`
+    `You have 6 hours to complete this payment.`
   );
 });
 
