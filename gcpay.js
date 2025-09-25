@@ -35,7 +35,198 @@ const provider = new ethers.providers.JsonRpcProvider(`https://base-mainnet.g.al
 let activePaymentWeek = null;
 let reminderIntervals = new Map();
 let paymentCheckIntervals = new Map();
-let processedTransactions = new Map(); // Track processed transactions per chat
+let initialBalance = null;
+
+// Remove all users except paid members
+async function removeUnpaidUsers(chatId) {
+  if (!activePaymentWeek) return 0;
+
+  const paidUserIds = new Set();
+  const unpaidUsers = [];
+
+  // Identify paid and unpaid users
+  for (const [userId, userData] of activePaymentWeek.users.entries()) {
+    if (userData.paid) {
+      paidUserIds.add(userId.toString());
+    } else {
+      unpaidUsers.push({ userId, userData });
+    }
+  }
+
+  let removalCount = 0;
+  let errorCount = 0;
+
+  try {
+    // First, get all chat members to remove everyone except paid users
+    const chatMembers = await getAllChatMembers(chatId);
+    
+    for (const member of chatMembers) {
+      const memberUserId = member.user.id.toString();
+      
+      // Skip if user is paid, bot itself, or admin
+      if (paidUserIds.has(memberUserId) || 
+          memberUserId === bot.botInfo.id.toString() ||
+          member.status === 'administrator' || 
+          member.status === 'creator') {
+        continue;
+      }
+
+      // Remove the user
+      try {
+        await bot.telegram.banChatMember(chatId, parseInt(memberUserId));
+        console.log(`✅ Removed user ${memberUserId} from group`);
+        removalCount++;
+        
+        // Add delay to avoid rate limits
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        
+      } catch (error) {
+        console.error(`❌ Error removing user ${memberUserId}:`, error.message);
+        errorCount++;
+        
+        // Continue with next user even if one fails
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+    
+  } catch (error) {
+    console.error("Error fetching chat members:", error);
+  }
+
+  console.log(`Removal completed: ${removalCount} users removed, ${errorCount} errors`);
+  return removalCount;
+}
+
+// Get all chat members (handles pagination)
+async function getAllChatMembers(chatId) {
+  const allMembers = [];
+  let offset = 0;
+  const limit = 200; // Telegram API limit
+  
+  try {
+    while (true) {
+      const members = await bot.telegram.getChatMembers(chatId, offset, limit);
+      
+      if (members.length === 0) break;
+      
+      allMembers.push(...members);
+      offset += members.length;
+      
+      // Break if we got fewer members than requested (end of list)
+      if (members.length < limit) break;
+      
+      // Small delay to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  } catch (error) {
+    console.error("Error fetching chat members:", error);
+  }
+  
+  return allMembers;
+}
+
+// Enhanced endPaymentWeek function
+async function endPaymentWeek(chatId) {
+  if (!activePaymentWeek || activePaymentWeek.chatId !== chatId) return;
+
+  console.log(`Ending payment week for chat ${chatId}`);
+
+  // Clear intervals
+  cleanupIntervals(chatId);
+
+  const paidUsers = [];
+  const unpaidUsers = [];
+
+  // Categorize users
+  for (const [userId, userData] of activePaymentWeek.users.entries()) {
+    if (userData.paid) {
+      paidUsers.push({
+        userId,
+        username: userData.username || `User ${userId}`,
+        amount: userData.amount
+      });
+    } else {
+      unpaidUsers.push({
+        userId,
+        username: userData.username || `User ${userId}`,
+        amount: userData.amount
+      });
+    }
+  }
+
+  // Send pre-removal notification
+  await bot.telegram.sendMessage(
+    chatId,
+    `🔄 PAYMENT CYCLE ENDING...\n\n` +
+    `Removing all unpaid users...\n` +
+    `Paid users will remain in the group.`
+  );
+
+  // Remove ALL users except paid members
+  const removalCount = await removeUnpaidUsers(chatId);
+
+  // Send final summary
+  const summaryMessage = `📊 WEEKLY PAYMENT CYCLE COMPLETED\n\n` +
+    `Total Participants: ${activePaymentWeek.users.size}\n` +
+    `✅ Paid Users: ${paidUsers.length}\n` +
+    `❌ Removed Users: ${removalCount}\n\n` +
+    `🏆 Paid Members (Safe):\n` +
+    `${paidUsers.map(u => `• ${u.username}`).join('\n') || 'None'}\n\n` +
+    `All unpaid users have been removed from the group.`;
+
+  await bot.telegram.sendMessage(chatId, summaryMessage);
+
+  // Save to database
+  await db.collection("weekly_payments").doc(activePaymentWeek.weekId).update({
+    ended: true,
+    totalParticipants: activePaymentWeek.users.size,
+    paidCount: paidUsers.length,
+    removedCount: removalCount,
+    paidUsers: paidUsers.map(u => ({ userId: u.userId, username: u.username })),
+    endedAt: Date.now()
+  });
+
+  // Cleanup
+  activePaymentWeek = null;
+  initialBalance = null;
+  
+  console.log(`Payment week ended. Removed ${removalCount} users.`);
+}
+
+// Cleanup intervals function
+function cleanupIntervals(chatId) {
+  const intervals = [
+    { map: reminderIntervals, name: 'reminder' },
+    { map: paymentCheckIntervals, name: 'paymentCheck' }
+  ];
+
+  intervals.forEach(({ map, name }) => {
+    if (map.has(chatId)) {
+      clearInterval(map.get(chatId));
+      map.delete(chatId);
+      console.log(`Cleared ${name} interval for chat ${chatId}`);
+    }
+  });
+}
+
+// Add error handling for member fetching
+async function safeGetChatMembers(chatId) {
+  try {
+    // Check if bot has admin permissions
+    const chat = await bot.telegram.getChat(chatId);
+    const botMember = await bot.telegram.getChatMember(chatId, bot.botInfo.id);
+    
+    if (botMember.status !== 'administrator' || !botMember.can_restrict_members) {
+      console.error("Bot doesn't have permission to remove members");
+      return [];
+    }
+    
+    return await getAllChatMembers(chatId);
+  } catch (error) {
+    console.error("Failed to get chat members:", error);
+    return [];
+  }
+}
 
 // Get Base ETH amount for $0.5 with strict price constraints
 async function getBaseEthAmount() {
@@ -76,221 +267,129 @@ function generateFractionalAmount(baseAmount, userId) {
   return fixedAmount;
 }
 
-// Monitor main wallet for incoming payments - RELIABLE VERSION
-async function monitorMainWallet(chatId) {
+// Monitor main wallet balance changes - SIMPLE & RELIABLE
+async function monitorWalletBalance(chatId) {
   if (!activePaymentWeek) return;
 
-  console.log(`🚀 Starting reliable transaction monitoring for chat ${chatId}`);
+  console.log(`🚀 Starting balance monitoring for chat ${chatId}`);
   
-  // Initialize processed transactions set for this chat
-  if (!processedTransactions.has(chatId)) {
-    processedTransactions.set(chatId, new Set());
-  }
-  
-  const processedHashes = processedTransactions.get(chatId);
-  let startTimestamp = Date.now(); // Track when monitoring started
+  // Get initial balance
+  initialBalance = await provider.getBalance(MAIN_WALLET_ADDRESS);
+  console.log(`Initial balance: ${ethers.utils.formatEther(initialBalance)} ETH`);
 
   const interval = setInterval(async () => {
     try {
-      // Get recent transactions (last 30 minutes)
-      const recentTransactions = await getRecentTransactionsByTime(MAIN_WALLET_ADDRESS, 30);
+      const currentBalance = await provider.getBalance(MAIN_WALLET_ADDRESS);
+      const balanceDiff = currentBalance.sub(initialBalance);
       
-      if (recentTransactions.length > 0) {
-        // Filter out already processed transactions and transactions before monitoring started
-        const newTransactions = recentTransactions.filter(tx => 
-          !processedHashes.has(tx.hash) && tx.timestamp * 1000 >= startTimestamp
-        );
+      if (balanceDiff.gt(0)) {
+        const amountReceived = parseFloat(ethers.utils.formatEther(balanceDiff));
+        console.log(`💰 New payment detected: ${amountReceived} ETH`);
         
-        if (newTransactions.length > 0) {
-          console.log(`Found ${newTransactions.length} new transactions to process`);
-          
-          for (const transaction of newTransactions) {
-            await processIncomingTransfer(transaction, chatId);
-            // Mark as processed
-            processedHashes.add(transaction.hash);
-            console.log(`Processed transaction: ${transaction.hash}`);
-          }
-        }
-      }
-      
-      // Clean up old hashes to prevent memory issues (keep last 100)
-      if (processedHashes.size > 100) {
-        const hashesArray = Array.from(processedHashes);
-        const recentHashes = hashesArray.slice(-50);
-        processedHashes.clear();
-        recentHashes.forEach(hash => processedHashes.add(hash));
+        await identifyPayment(amountReceived, chatId);
+        
+        // Update initial balance to current balance for next detection
+        initialBalance = currentBalance;
       }
     } catch (error) {
-      console.error("Error monitoring wallet:", error);
+      console.error("Balance monitoring error:", error.message);
     }
   }, 10000); // Check every 10 seconds
 
   paymentCheckIntervals.set(chatId, interval);
 }
 
-// Get recent transactions by time window (in minutes)
-// Get recent transactions by time window (in minutes) - FIXED
-async function getRecentTransactionsByTime(address, minutesBack) {
-  try {
-    const alchemyUrl = `https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`;
-    
-    const timeAgo = Math.floor((Date.now() - (minutesBack * 60 * 1000)) / 1000); // Convert to seconds
-
-    const response = await axios.post(alchemyUrl, {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "alchemy_getAssetTransfers",
-      params: [{
-        fromBlock: "0x0",
-        toAddress: address.toLowerCase(),
-        category: ["external"],
-        order: "desc", // Newest first
-        maxCount: "0x32", // Last 50 transactions
-        excludeZeroValue: false,
-        withMetadata: true
-      }]
-    });
-
-    if (response.data && response.data.result && response.data.result.transfers) {
-      const transactions = response.data.result.transfers.map(transfer => {
-        // FIX: Handle the value conversion safely
-        let value = "0";
-        try {
-          // Check if value exists and is not too small
-          if (transfer.value && transfer.value !== "0x0") {
-            // Convert hex to decimal string safely
-            const bigNumberValue = ethers.BigNumber.from(transfer.value);
-            value = ethers.utils.formatEther(bigNumberValue);
-          }
-        } catch (error) {
-          console.warn(`Could not parse value for tx ${transfer.hash}:`, error.message);
-          value = "0";
-        }
-        
-        const timestamp = transfer.metadata?.blockTimestamp ? parseInt(transfer.metadata.blockTimestamp, 16) : 0;
-        
-        return {
-          hash: transfer.hash,
-          from: transfer.from,
-          value: parseFloat(value), // Convert to number
-          blockNumber: parseInt(transfer.blockNum, 16),
-          timestamp: timestamp
-        };
-      }).filter(tx => tx.timestamp >= timeAgo && tx.value > 0); // Only transactions from the last X minutes with value
-      
-      console.log(`Found ${transactions.length} transactions in the last ${minutesBack} minutes`);
-      return transactions;
-    } else {
-      console.log('No transactions found in response');
-      return [];
-    }
-
-  } catch (error) {
-    console.error("Error fetching transactions from Alchemy:", error.message);
-    return [];
-  }
-}
-
-// Alternative: Get transactions from specific block range as fallback - FIXED
-async function getTransactionsFromBlockRange(address, fromBlock, toBlock) {
-  try {
-    const alchemyUrl = `https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`;
-
-    const response = await axios.post(alchemyUrl, {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "alchemy_getAssetTransfers",
-      params: [{
-        fromBlock: `0x${fromBlock.toString(16)}`,
-        toBlock: `0x${toBlock.toString(16)}`,
-        toAddress: address.toLowerCase(),
-        category: ["external"],
-        excludeZeroValue: false,
-        withMetadata: true
-      }]
-    });
-
-    if (response.data && response.data.result && response.data.result.transfers) {
-      return response.data.result.transfers.map(transfer => {
-        // FIX: Handle the value conversion safely
-        let value = "0";
-        try {
-          if (transfer.value && transfer.value !== "0x0") {
-            const bigNumberValue = ethers.BigNumber.from(transfer.value);
-            value = ethers.utils.formatEther(bigNumberValue);
-          }
-        } catch (error) {
-          console.warn(`Could not parse value for tx ${transfer.hash}:`, error.message);
-          value = "0";
-        }
-        
-        return {
-          hash: transfer.hash,
-          from: transfer.from,
-          value: parseFloat(value),
-          blockNumber: parseInt(transfer.blockNum, 16),
-          timestamp: transfer.metadata?.blockTimestamp ? parseInt(transfer.metadata.blockTimestamp, 16) : 0
-        };
-      }).filter(tx => tx.value > 0); // Only transactions with value
-    }
-    return [];
-  } catch (error) {
-    console.error("Error fetching transactions by block range:", error.message);
-    return [];
-  }
-}
-
-// Process incoming transfer and identify user by exact amount
-async function processIncomingTransfer(transfer, chatId) {
+// Identify which user made the payment based on amount
+async function identifyPayment(amountReceived, chatId) {
   if (!activePaymentWeek) return;
 
-  const amount = parseFloat(transfer.value);
-  console.log(`🔍 Processing transfer: ${amount} ETH from ${transfer.from}, checking ${activePaymentWeek.users.size} users`);
+  console.log(`🔍 Identifying payment of ${amountReceived} ETH among ${activePaymentWeek.users.size} users`);
 
-  // Debug: log all user amounts
-  console.log('Current user amounts:');
-  activePaymentWeek.users.forEach((userData, userId) => {
-    console.log(`User ${userId}: ${userData.amount} ETH (paid: ${userData.paid})`);
-  });
-
-  // Find user by fractional amount with tolerance
+  // Single user payment detection
   for (const [userId, userData] of activePaymentWeek.users.entries()) {
-    const amountDifference = Math.abs(amount - userData.amount);
-    const tolerance = 0.000001; // Small tolerance for floating point
+    const amountDifference = Math.abs(amountReceived - userData.amount);
+    const tolerance = 0.000001;
     
     if (amountDifference < tolerance && !userData.paid) {
-      console.log(`✅ Payment match found! User ${userId} amount: ${userData.amount}, received: ${amount}, difference: ${amountDifference}`);
+      await processUserPayment(userId, userData, amountReceived, chatId);
+      return;
+    }
+  }
+
+  // Multiple payments detection (2-4 users paid at same time)
+  const unpaidUsers = Array.from(activePaymentWeek.users.entries())
+    .filter(([userId, userData]) => !userData.paid)
+    .map(([userId, userData]) => ({ userId, userData }));
+
+  // Check all combinations of 2, 3, or 4 users
+  for (let count = 2; count <= 4; count++) {
+    const combinations = getCombinations(unpaidUsers, count);
+    
+    for (const combo of combinations) {
+      const totalAmount = combo.reduce((sum, user) => sum + user.userData.amount, 0);
+      const amountDifference = Math.abs(amountReceived - totalAmount);
+      const tolerance = 0.000001 * count; // Slightly larger tolerance for multiple payments
       
-      userData.paid = true;
-      userData.txHash = transfer.hash;
-      userData.paidAt = Date.now();
+      if (amountDifference < tolerance) {
+        console.log(`✅ Found ${count} users who paid together: ${combo.map(u => u.userId).join(', ')}`);
+        
+        // Process all users in this combination
+        for (const { userId, userData } of combo) {
+          await processUserPayment(userId, userData, userData.amount, chatId);
+        }
+        return;
+      }
+    }
+  }
 
-      // Save to database
-      await db.collection("weekly_payments").doc(activePaymentWeek.weekId).collection("payments").doc(userId).set({
-        userId: userId,
-        username: userData.username,
-        amount: userData.amount,
-        paid: true,
-        txHash: transfer.hash,
-        fromAddress: transfer.from,
-        paidAt: Date.now(),
-        confirmed: true
-      });
+  console.log(`❌ No match found for payment of ${amountReceived} ETH`);
+}
 
-      // Notify group with proper tag
-      const mention = userData.username ? `@${userData.username}` : `[User](tg://user?id=${userId})`;
-      await bot.telegram.sendMessage(
-        chatId,
-        `✅ PAYMENT CONFIRMED!\n\n${mention} has paid their weekly fee.\nAmount: ${userData.amount} BASE ETH\nTransaction: ${transfer.hash.substring(0, 10)}...`,
-        { parse_mode: 'Markdown' }
-      );
+// Process individual user payment
+async function processUserPayment(userId, userData, amount, chatId) {
+  userData.paid = true;
+  userData.paidAt = Date.now();
 
-      console.log(`Payment confirmed for user ${userId}`);
-      return; // Stop after finding match
+  // Save to database
+  await db.collection("weekly_payments").doc(activePaymentWeek.weekId).collection("payments").doc(userId).set({
+    userId: userId,
+    username: userData.username,
+    amount: userData.amount,
+    paid: true,
+    paidAt: Date.now(),
+    confirmed: true
+  });
+
+  // Notify group with proper tag
+  const mention = userData.username ? `@${userData.username}` : `[User](tg://user?id=${userId})`;
+  await bot.telegram.sendMessage(
+    chatId,
+    `✅ PAYMENT CONFIRMED!\n\n${mention} has paid their weekly fee.\nAmount: ${userData.amount} BASE ETH`,
+    { parse_mode: 'Markdown' }
+  );
+
+  console.log(`Payment confirmed for user ${userId} with amount ${userData.amount}`);
+}
+
+// Helper function to get combinations of users
+function getCombinations(array, size) {
+  const results = [];
+  
+  function combine(start, combo) {
+    if (combo.length === size) {
+      results.push([...combo]);
+      return;
+    }
+    
+    for (let i = start; i < array.length; i++) {
+      combo.push(array[i]);
+      combine(i + 1, combo);
+      combo.pop();
     }
   }
   
-  console.log(`❌ No user match found for amount ${amount}`);
+  combine(0, []);
+  return results;
 }
 
 // Start weekly payment cycle (admin only)
@@ -327,8 +426,8 @@ bot.command('week', async (ctx) => {
     ])
   );
 
-  // Start monitoring and reminders
-  monitorMainWallet(chatId);
+  // Start balance monitoring and reminders
+  monitorWalletBalance(chatId);
   
   const reminderInterval = setInterval(() => {
     sendReminders(chatId);
@@ -352,12 +451,6 @@ bot.action("show_payment_info", async (ctx) => {
   const userId = ctx.from.id.toString();
   const username = ctx.from.username || ctx.from.first_name;
   const chatId = activePaymentWeek.chatId;
-
-  // Debug current users
-  console.log(`Current active users and amounts:`);
-  activePaymentWeek.users.forEach((userData, uid) => {
-    console.log(`User ${uid}: ${userData.amount} ETH`);
-  });
 
   let userData = activePaymentWeek.users.get(userId);
 
@@ -469,11 +562,6 @@ async function endPaymentWeek(chatId) {
     paymentCheckIntervals.delete(chatId);
   }
 
-  // Clean up processed transactions
-  if (processedTransactions.has(chatId)) {
-    processedTransactions.delete(chatId);
-  }
-
   const unpaidUsers = [];
   const paidUsers = [];
 
@@ -486,17 +574,8 @@ async function endPaymentWeek(chatId) {
   }
 
   // Remove unpaid users
-  let removalCount = 0;
-  for (const { userId, userData } of unpaidUsers) {
-    try {
-      await bot.telegram.banChatMember(chatId, parseInt(userId));
-      console.log(`Removed user ${userId} from group`);
-      removalCount++;
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    } catch (error) {
-      console.error(`Error removing user ${userId}:`, error);
-    }
-  }
+  // Remove ALL users except paid members
+const removalCount = await removeUnpaidUsers(chatId);
 
   const summaryMessage = `📊 WEEKLY PAYMENT CYCLE ENDED\n\n` +
     `Total Participants: ${activePaymentWeek.users.size}\n` +
@@ -516,6 +595,7 @@ async function endPaymentWeek(chatId) {
   });
 
   activePaymentWeek = null;
+  initialBalance = null;
   console.log(`Payment week ended. Removed ${removalCount} users.`);
 }
 
@@ -552,7 +632,7 @@ bot.command('status', async (ctx) => {
 
 // Root endpoint
 app.get("/", (req, res) => {
-  res.send("Group Payment Bot with Alchemy is running 🚀");
+  res.send("Group Payment Bot with Balance Monitoring is running 🚀");
 });
 
 // Start server
@@ -560,4 +640,4 @@ app.listen(PORT, () => {
   console.log(`Server is listening on port ${PORT}`);
 });
 
-console.log("💙 Group Payment Bot with Alchemy running...");
+console.log("💙 Group Payment Bot with Balance Monitoring running...");
