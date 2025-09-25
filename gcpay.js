@@ -35,7 +35,7 @@ const provider = new ethers.providers.JsonRpcProvider(`https://base-mainnet.g.al
 let activePaymentWeek = null;
 let reminderIntervals = new Map();
 let paymentCheckIntervals = new Map();
-let lastCheckedBlocks = new Map();
+let processedTransactions = new Map(); // Track processed transactions per chat
 
 // Get Base ETH amount for $0.5 with strict price constraints
 async function getBaseEthAmount() {
@@ -76,46 +76,111 @@ function generateFractionalAmount(baseAmount, userId) {
   return fixedAmount;
 }
 
-// Monitor main wallet for incoming payments using Alchemy - FIXED
+// Monitor main wallet for incoming payments - RELIABLE VERSION
 async function monitorMainWallet(chatId) {
   if (!activePaymentWeek) return;
 
-  console.log(`🚀 Starting Alchemy monitoring for chat ${chatId}`);
+  console.log(`🚀 Starting reliable transaction monitoring for chat ${chatId}`);
   
-  let lastCheckedBlock = await provider.getBlockNumber();
-  lastCheckedBlocks.set(chatId, lastCheckedBlock);
-  console.log(`Starting from block: ${lastCheckedBlock}`);
+  // Initialize processed transactions set for this chat
+  if (!processedTransactions.has(chatId)) {
+    processedTransactions.set(chatId, new Set());
+  }
+  
+  const processedHashes = processedTransactions.get(chatId);
+  let startTimestamp = Date.now(); // Track when monitoring started
 
   const interval = setInterval(async () => {
     try {
-      const currentBlock = await provider.getBlockNumber();
-      const lastBlock = lastCheckedBlocks.get(chatId) || currentBlock - 1;
+      // Get recent transactions (last 30 minutes)
+      const recentTransactions = await getRecentTransactionsByTime(MAIN_WALLET_ADDRESS, 30);
       
-      if (currentBlock > lastBlock) {
-        console.log(`Checking blocks ${lastBlock + 1} to ${currentBlock}`);
-        const transfers = await getRecentTransfers(MAIN_WALLET_ADDRESS, lastBlock + 1, currentBlock);
+      if (recentTransactions.length > 0) {
+        // Filter out already processed transactions and transactions before monitoring started
+        const newTransactions = recentTransactions.filter(tx => 
+          !processedHashes.has(tx.hash) && tx.timestamp * 1000 >= startTimestamp
+        );
         
-        console.log(`Found ${transfers.length} transfers to process`);
-        for (const transfer of transfers) {
-          await processIncomingTransfer(transfer, chatId);
+        if (newTransactions.length > 0) {
+          console.log(`Found ${newTransactions.length} new transactions to process`);
+          
+          for (const transaction of newTransactions) {
+            await processIncomingTransfer(transaction, chatId);
+            // Mark as processed
+            processedHashes.add(transaction.hash);
+            console.log(`Processed transaction: ${transaction.hash}`);
+          }
         }
-        
-        lastCheckedBlocks.set(chatId, currentBlock);
+      }
+      
+      // Clean up old hashes to prevent memory issues (keep last 100)
+      if (processedHashes.size > 100) {
+        const hashesArray = Array.from(processedHashes);
+        const recentHashes = hashesArray.slice(-50);
+        processedHashes.clear();
+        recentHashes.forEach(hash => processedHashes.add(hash));
       }
     } catch (error) {
-      console.error("Error monitoring wallet with Alchemy:", error);
+      console.error("Error monitoring wallet:", error);
     }
-  }, 15000); // Check every 15 seconds
+  }, 10000); // Check every 10 seconds
 
   paymentCheckIntervals.set(chatId, interval);
 }
 
-// Get recent transfers using Alchemy's enhanced API - FIXED
-async function getRecentTransfers(address, fromBlock, toBlock) {
+// Get recent transactions by time window (in minutes)
+async function getRecentTransactionsByTime(address, minutesBack) {
   try {
     const alchemyUrl = `https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`;
+    
+    const timeAgo = Math.floor((Date.now() - (minutesBack * 60 * 1000)) / 1000); // Convert to seconds
 
-    console.log(`Checking blocks ${fromBlock} to ${toBlock} for address ${address}`);
+    const response = await axios.post(alchemyUrl, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "alchemy_getAssetTransfers",
+      params: [{
+        fromBlock: "0x0",
+        toAddress: address.toLowerCase(),
+        category: ["external"],
+        order: "desc", // Newest first
+        maxCount: "0x32", // Last 50 transactions
+        excludeZeroValue: false,
+        withMetadata: true
+      }]
+    });
+
+    if (response.data && response.data.result && response.data.result.transfers) {
+      const transactions = response.data.result.transfers.map(transfer => {
+        const value = ethers.utils.formatEther(transfer.value || "0");
+        const timestamp = transfer.metadata?.blockTimestamp ? parseInt(transfer.metadata.blockTimestamp, 16) : 0;
+        
+        return {
+          hash: transfer.hash,
+          from: transfer.from,
+          value: value,
+          blockNumber: parseInt(transfer.blockNum, 16),
+          timestamp: timestamp
+        };
+      }).filter(tx => tx.timestamp >= timeAgo); // Only transactions from the last X minutes
+      
+      console.log(`Found ${transactions.length} transactions in the last ${minutesBack} minutes`);
+      return transactions;
+    } else {
+      console.log('No transactions found in response');
+      return [];
+    }
+
+  } catch (error) {
+    console.error("Error fetching transactions from Alchemy:", error.response?.data || error.message);
+    return [];
+  }
+}
+
+// Alternative: Get transactions from specific block range as fallback
+async function getTransactionsFromBlockRange(address, fromBlock, toBlock) {
+  try {
+    const alchemyUrl = `https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}`;
 
     const response = await axios.post(alchemyUrl, {
       jsonrpc: "2.0",
@@ -132,31 +197,22 @@ async function getRecentTransfers(address, fromBlock, toBlock) {
     });
 
     if (response.data && response.data.result && response.data.result.transfers) {
-      const transfers = response.data.result.transfers.map(transfer => {
-        const value = ethers.utils.formatEther(transfer.value || "0");
-        console.log(`Found transfer: ${value} ETH from ${transfer.from}`);
-        return {
-          hash: transfer.hash,
-          from: transfer.from,
-          value: value,
-          blockNumber: parseInt(transfer.blockNum, 16),
-          metadata: transfer.metadata
-        };
-      });
-      console.log(`Found ${transfers.length} transfers total`);
-      return transfers;
-    } else {
-      console.log('No transfers found in response');
-      return [];
+      return response.data.result.transfers.map(transfer => ({
+        hash: transfer.hash,
+        from: transfer.from,
+        value: ethers.utils.formatEther(transfer.value || "0"),
+        blockNumber: parseInt(transfer.blockNum, 16),
+        timestamp: transfer.metadata?.blockTimestamp ? parseInt(transfer.metadata.blockTimestamp, 16) : 0
+      }));
     }
-
+    return [];
   } catch (error) {
-    console.error("Error fetching transfers from Alchemy:", error.response?.data || error.message);
+    console.error("Error fetching transactions by block range:", error);
     return [];
   }
 }
 
-// Process incoming transfer and identify user by exact amount - FIXED
+// Process incoming transfer and identify user by exact amount
 async function processIncomingTransfer(transfer, chatId) {
   if (!activePaymentWeek) return;
 
@@ -385,8 +441,9 @@ async function endPaymentWeek(chatId) {
     paymentCheckIntervals.delete(chatId);
   }
 
-  if (lastCheckedBlocks.has(chatId)) {
-    lastCheckedBlocks.delete(chatId);
+  // Clean up processed transactions
+  if (processedTransactions.has(chatId)) {
+    processedTransactions.delete(chatId);
   }
 
   const unpaidUsers = [];
