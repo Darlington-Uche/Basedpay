@@ -402,7 +402,7 @@ bot.command('week', async (ctx) => {
     weekId: weekId,
     chatId: chatId,
     startTime: Date.now(),
-    endTime: Date.now() + (24 * 60 * 60 * 1000),
+    endTime: Date.now() + ( 10 * 1000),
     users: new Map()
   };
 
