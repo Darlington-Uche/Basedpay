@@ -255,19 +255,55 @@ async function getBaseEthAmount() {
   }
 }
 
-// Generate unique fractional amount for user identification
+// Generate unique fractional amount for user identification (FIXED PRECISION)
 function generateFractionalAmount(baseAmount, userId) {
-  // Use user ID to generate unique fraction
+  // Use user ID to generate unique fraction (last 4 digits)
   const userHash = (parseInt(userId.toString().slice(-4)) % 99) + 1;
   const userIdFraction = userHash / 1000000; // Small fraction
+  
+  // Calculate with fixed precision
   const uniqueAmount = baseAmount + userIdFraction;
-  const fixedAmount = Number(uniqueAmount.toFixed(6));
-
-  console.log(`Base: ${baseAmount}, User ID: ${userId}, Final: ${fixedAmount}`);
+  
+  // Convert to fixed 6 decimal places as NUMBER (not string)
+  const fixedAmount = parseFloat(uniqueAmount.toFixed(6));
+  
+  console.log(`Base: ${baseAmount}, User ID: ${userId}, User Hash: ${userHash}, Fraction: ${userIdFraction}, Final: ${fixedAmount}`);
   return fixedAmount;
 }
 
-// Monitor main wallet balance changes - SIMPLE & RELIABLE
+// Identify which user made the payment based on EXACT amount (NO TOLERANCE)
+async function identifyPayment(amountReceived, chatId) {
+  if (!activePaymentWeek) return;
+
+  console.log(`🔍 Identifying payment of ${amountReceived} ETH among ${activePaymentWeek.users.size} users`);
+  console.log(`Available users:`, Array.from(activePaymentWeek.users.entries()));
+
+  // Convert amountReceived to same precision as stored amounts
+  const receivedAmountFixed = parseFloat(amountReceived.toFixed(6));
+  
+  console.log(`Looking for EXACT match: ${receivedAmountFixed}`);
+
+  // Single user payment detection - EXACT MATCH ONLY
+  for (const [userId, userData] of activePaymentWeek.users.entries()) {
+    const userAmountFixed = parseFloat(userData.amount.toFixed(6));
+    
+    console.log(`Comparing: ${receivedAmountFixed} === ${userAmountFixed} for user ${userId}`);
+    
+    // STRICT EXACT COMPARISON - NO TOLERANCE
+    if (receivedAmountFixed === userAmountFixed && !userData.paid) {
+      console.log(`✅ EXACT MATCH FOUND for user ${userId}`);
+      await processUserPayment(userId, userData, receivedAmountFixed, chatId);
+      return;
+    }
+  }
+
+  console.log(`❌ No EXACT match found for payment of ${receivedAmountFixed} ETH`);
+}
+
+// Also fix the multiple payments detection to use exact matching
+// Remove the tolerance-based matching completely since you want exact amounts only
+
+// In the monitorWalletBalance function, fix the amount parsing:
 async function monitorWalletBalance(chatId) {
   if (!activePaymentWeek) return;
 
@@ -284,9 +320,11 @@ async function monitorWalletBalance(chatId) {
       
       if (balanceDiff.gt(0)) {
         const amountReceived = parseFloat(ethers.utils.formatEther(balanceDiff));
-        console.log(`💰 New payment detected: ${amountReceived} ETH`);
+        const amountFixed = parseFloat(amountReceived.toFixed(6));
         
-        await identifyPayment(amountReceived, chatId);
+        console.log(`💰 New payment detected: ${amountReceived} ETH -> ${amountFixed} ETH (fixed)`);
+        
+        await identifyPayment(amountFixed, chatId);
         
         // Update initial balance to current balance for next detection
         initialBalance = currentBalance;
@@ -294,58 +332,12 @@ async function monitorWalletBalance(chatId) {
     } catch (error) {
       console.error("Balance monitoring error:", error.message);
     }
-  }, 10000); // Check every 10 seconds
+  }, 3000);
 
   paymentCheckIntervals.set(chatId, interval);
 }
 
-// Identify which user made the payment based on amount
-async function identifyPayment(amountReceived, chatId) {
-  if (!activePaymentWeek) return;
-
-  console.log(`🔍 Identifying payment of ${amountReceived} ETH among ${activePaymentWeek.users.size} users`);
-
-  // Single user payment detection
-  for (const [userId, userData] of activePaymentWeek.users.entries()) {
-    const amountDifference = Math.abs(amountReceived - userData.amount);
-    const tolerance = 0.000001;
-    
-    if (amountDifference < tolerance && !userData.paid) {
-      await processUserPayment(userId, userData, amountReceived, chatId);
-      return;
-    }
-  }
-
-  // Multiple payments detection (2-4 users paid at same time)
-  const unpaidUsers = Array.from(activePaymentWeek.users.entries())
-    .filter(([userId, userData]) => !userData.paid)
-    .map(([userId, userData]) => ({ userId, userData }));
-
-  // Check all combinations of 2, 3, or 4 users
-  for (let count = 2; count <= 4; count++) {
-    const combinations = getCombinations(unpaidUsers, count);
-    
-    for (const combo of combinations) {
-      const totalAmount = combo.reduce((sum, user) => sum + user.userData.amount, 0);
-      const amountDifference = Math.abs(amountReceived - totalAmount);
-      const tolerance = 0.000001 * count; // Slightly larger tolerance for multiple payments
-      
-      if (amountDifference < tolerance) {
-        console.log(`✅ Found ${count} users who paid together: ${combo.map(u => u.userId).join(', ')}`);
-        
-        // Process all users in this combination
-        for (const { userId, userData } of combo) {
-          await processUserPayment(userId, userData, userData.amount, chatId);
-        }
-        return;
-      }
-    }
-  }
-
-  console.log(`❌ No match found for payment of ${amountReceived} ETH`);
-}
-
-// Process individual user payment
+// Fix the notification message parsing error
 async function processUserPayment(userId, userData, amount, chatId) {
   userData.paid = true;
   userData.paidAt = Date.now();
@@ -360,12 +352,11 @@ async function processUserPayment(userId, userData, amount, chatId) {
     confirmed: true
   });
 
-  // Notify group with proper tag
-  const mention = userData.username ? `@${userData.username}` : `[User](tg://user?id=${userId})`;
+  // Fix the notification - remove Markdown if it causes issues
+  const mention = userData.username ? `@${userData.username}` : `User ${userId}`;
   await bot.telegram.sendMessage(
     chatId,
-    `✅ PAYMENT CONFIRMED!\n\n${mention} has paid their weekly fee.\nAmount: ${userData.amount} BASE ETH`,
-    { parse_mode: 'Markdown' }
+    `✅ PAYMENT CONFIRMED!\n\n${mention} has paid their weekly fee.\nAmount: ${userData.amount} BASE ETH`
   );
 
   console.log(`Payment confirmed for user ${userId} with amount ${userData.amount}`);
