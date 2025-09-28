@@ -385,7 +385,7 @@ function getCombinations(array, size) {
 
 // Start weekly payment cycle (admin only)
 bot.command('week', async (ctx) => {
-  const adminUserId = process.env.ADMIN_USER_ID;
+  const adminUserId = 8075521537;
   if (ctx.from.id.toString() !== adminUserId) {
     return ctx.reply("❌ This command is for admins only.");
   }
