@@ -332,7 +332,7 @@ async function monitorWalletBalance(chatId) {
     } catch (error) {
       console.error("Balance monitoring error:", error.message);
     }
-  }, 3000);
+  }, 2000);
 
   paymentCheckIntervals.set(chatId, interval);
 }
@@ -428,7 +428,7 @@ bot.command('week', async (ctx) => {
 
   setTimeout(() => {
     endPaymentWeek(chatId);
-  },  6 * 60 * 60 * 1000);
+  },  12 * 60 * 60 * 1000);
 
   console.log(`Weekly payment cycle started for chat ${chatId}`);
 });
